@@ -241,13 +241,24 @@
             countdown = REFRESH_INTERVAL_SECONDS; // Reset timer
             timerEl.textContent = countdown;
             
-            // Run fetches in parallel
-            await Promise.all([
-                fetchAndMapVehicles(FEEDS.lime),
-                fetchAndMapVehicles(FEEDS.bird)
-            ]);
-            
-            loadingEl.style.display = 'none'; // Hide loading
+-           // Run fetches in parallel
+-           await Promise.all([
+-               fetchAndMapVehicles(FEEDS.lime),
+-               fetchAndMapVehocols(FEEDS.bird)
+-           ]);
+-           
+-           loadingEl.style.display = 'none'; // Hide loading
++           try {
++               // Run fetches in parallel
++               await Promise.all([
++                   fetchAndMapVehicles(FEEDS.lime),
++                   fetchAndMapVehicles(FEEDS.bird) // CORRECTED: Was fetchAndMapVehocols
++               ]);
++           } catch (error) {
++               console.error("A critical error occurred during feed update:", error);
++           } finally {
++               loadingEl.style.display = 'none'; // Hide loading, even if one feed fails
++           }
         }
         
         /**
