@@ -53,7 +53,7 @@
                     <span class="w-4 h-4 rounded-full bg-green-500 border-2 border-white shadow"></span>
                     <span class="font-semibold text-lg text-gray-700">Lime:</span>
                 </span>
-                <span id="lime-count" class="font-bold text-xl text-gray-900">...</span>
+                <span id="lime-count" class="font-bold text-xl text-gray-900 transition-colors">...</span>
             </div>
             
             <!-- Bird Count -->
@@ -62,7 +62,7 @@
                     <span class="w-4 h-4 rounded-full bg-blue-500 border-2 border-white shadow"></span>
                     <span class="font-semibold text-lg text-gray-700">Bird:</span>
                 </span>
-                <span id="bird-count" class="font-bold text-xl text-gray-900">...</span>
+                <span id="bird-count" class="font-bold text-xl text-gray-900 transition-colors">...</span>
             </div>
         </div>
         <div class="mt-3 text-xs text-gray-500">
@@ -101,7 +101,7 @@
 
         // We use a CORS proxy to prevent browser errors when fetching data from different domains.
         // This free proxy routes our request.
-        const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+        const CORS_PROXY = 'https://corsproxy.io/?url='; // CORRECTED: Using a working proxy
         
         const REFRESH_INTERVAL_SECONDS = 30; // Refresh every 30 seconds
         
@@ -146,30 +146,43 @@
         async function fetchAndMapVehicles(provider) {
             console.log(`Fetching data for ${provider.name}...`);
             let freeBikeStatusUrl;
+            const countEl = document.getElementById(`${provider.name.toLowerCase()}-count`);
 
             try {
                 // 1. Fetch the main gbfs.json file to find the URL for free_bike_status
-                const gbfsResponse = await fetch(CORS_PROXY + encodeURIComponent(provider.gbfs_url));
-                if (!gbfsResponse.ok) throw new Error(`Failed to fetch gbfs.json for ${provider.name}`);
+                // We must encode the URL for the proxy to understand it (REMOVED)
+                const gbfsResponse = await fetch(CORS_PROXY + provider.gbfs_url);
+                
+                if (!gbfsResponse.ok) {
+                    throw new Error(`Failed to fetch gbfs.json for ${provider.name} (Status: ${gbfsResponse.status})`);
+                }
                 
                 const gbfsData = await gbfsResponse.json();
-                
-                // Find the correct feed URL
-                const feed = gbfsData.data.en.feeds.find(f => f.name === 'free_bike_status');
-                if (!feed) throw new Error(`Could not find free_bike_status feed for ${provider.name}`);
-                
-                freeBikeStatusUrl = feed.url;
 
+                // Find the 'free_bike_status' URL from the response
+                const feed = gbfsData.data.en.feeds.find(f => f.name === 'free_bike_status');
+                
+                if (!feed || !feed.url) {
+                    throw new Error(`'free_bike_status' URL not found in gbfs.json for ${provider.name}`);
+                }
+                
+                // This is the direct URL to the scooter locations
+                freeBikeStatusUrl = feed.url;
+                
             } catch (error) {
                 console.error(`Error finding feed URL for ${provider.name}:`, error);
-                document.getElementById(`${provider.name.toLowerCase()}-count`).textContent = 'Error';
+                countEl.textContent = 'Error';
+                countEl.classList.add('text-red-600'); // Make error visible
                 return; // Stop execution for this provider
             }
 
             try {
-                // 2. Fetch the actual vehicle location data
-                const vehiclesResponse = await fetch(CORS_PROXY + encodeURIComponent(freeBikeStatusUrl));
-                if (!vehiclesResponse.ok) throw new Error(`Failed to fetch free_bike_status for ${provider.name}`);
+                // 2. Fetch the actual vehicle location data using the URL we just found
+                const vehiclesResponse = await fetch(CORS_PROXY + freeBikeStatusUrl);
+                
+                if (!vehiclesResponse.ok) {
+                    throw new Error(`Failed to fetch free_bike_status for ${provider.name} (Status: ${vehiclesResponse.status})`);
+                }
                 
                 const vehiclesData = await vehiclesResponse.json();
                 const vehicles = vehiclesData.data.bikes;
@@ -209,12 +222,14 @@
                 });
                 
                 // 6. Update the count in the UI
-                document.getElementById(`${provider.name.toLowerCase()}-count`).textContent = availableVehicles;
+                countEl.textContent = availableVehicles;
+                countEl.classList.remove('text-red-600'); // Remove error color on success
                 console.log(`Successfully mapped ${availableVehicles} ${provider.name} vehicles.`);
 
             } catch (error) {
                 console.error(`Error mapping vehicles for ${provider.name}:`, error);
-                document.getElementById(`${provider.name.toLowerCase()}-count`).textContent = 'Error';
+                countEl.textContent = 'Error';
+                countEl.classList.add('text-red-600'); // Make error visible
             }
         }
 
