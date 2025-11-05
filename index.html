@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Louisville Scooter Map (Bird & Lime)</title>
+    
+    <!-- 1. Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. Leaflet Map Library (CSS & JS) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+     crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+     crossorigin=""></script>
+     
+     <style>
+        /* Custom styles for the map and markers */
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* Prevent scrolling */
+            font-family: 'Inter', sans-serif;
+        }
+        #map {
+            height: 100%;
+            width: 100%;
+            z-index: 10;
+        }
+        /* Custom Leaflet icon styling (REMOVED) */
+        /* The .scooter-icon, .bird-icon, and .lime-icon styles are no longer needed 
+           as L.circleMarker handles the styling in JavaScript. */
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body class="relative">
+
+    <!-- Map Container -->
+    <div id="map"></div>
+    
+    <!-- Top-Right Corner: Info Box -->
+    <div class="absolute top-4 right-4 z-20 p-4 bg-white/90 backdrop-blur-sm rounded-lg shadow-xl border border-gray-200">
+        <h1 class="text-xl font-bold text-gray-800 mb-3">LOU Scooter Deployments</h1>
+        <div class="space-y-3">
+            <!-- Lime Count -->
+            <div class="flex justify-between items-center gap-4">
+                <span class="flex items-center gap-2">
+                    <span class="w-4 h-4 rounded-full bg-green-500 border-2 border-white shadow"></span>
+                    <span class="font-semibold text-lg text-gray-700">Lime:</span>
+                </span>
+                <span id="lime-count" class="font-bold text-xl text-gray-900">...</span>
+            </div>
+            
+            <!-- Bird Count -->
+            <div class="flex justify-between items-center gap-4">
+                <span class="flex items-center gap-2">
+                    <span class="w-4 h-4 rounded-full bg-blue-500 border-2 border-white shadow"></span>
+                    <span class="font-semibold text-lg text-gray-700">Bird:</span>
+                </span>
+                <span id="bird-count" class="font-bold text-xl text-gray-900">...</span>
+            </div>
+        </div>
+        <div class="mt-3 text-xs text-gray-500">
+            Updating in <span id="timer">30</span>s...
+        </div>
+    </div>
+    
+    <!-- Loading Indicator -->
+    <div id="loading" class="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-4 py-2 bg-white/90 backdrop-blur-sm rounded-lg shadow-xl text-gray-700 font-medium">
+        <span class="flex items-center gap-2">
+            <svg class="animate-spin -ml-1 mr-1 h-5 w-5 text-gray-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Loading scooter data...
+        </span>
+    </div>
+
+    <script>
+        // --- CONFIGURATION ---
+        // GBFS (General Bikeshare Feed Specification) endpoints for Louisville
+        const FEEDS = {
+            lime: {
+                name: 'Lime',
+                gbfs_url: 'https://data.lime.bike/api/partners/v1/gbfs/louisville/gbfs.json',
+                color: '#34c759', // Green
+                iconClass: 'lime-icon'
+            },
+            bird: {
+                name: 'Bird',
+                gbfs_url: 'https://mds.bird.co/gbfs/louisville/gbfs.json',
+                color: '#007aff', // Blue
+                iconClass: 'bird-icon'
+            }
+        };
+
+        // We use a CORS proxy to prevent browser errors when fetching data from different domains.
+        // This free proxy routes our request.
+        const CORS_PROXY = 'https://corsproxy.io/?';
+        
+        const REFRESH_INTERVAL_SECONDS = 30; // Refresh every 30 seconds
+        
+        // Map centered on Louisville
+        const MAP_CENTER = [38.2527, -85.7585];
+        const MAP_ZOOM = 14;
+
+        // --- APPLICATION ---
+        
+        let map;
+        const layerGroups = {
+            lime: null,
+            bird: null
+        };
+
+        const loadingEl = document.getElementById('loading');
+        const timerEl = document.getElementById('timer');
+        let countdown = REFRESH_INTERVAL_SECONDS;
+
+        /**
+         * Initialize the Leaflet map
+         */
+        function initMap() {
+            map = L.map('map').setView(MAP_CENTER, MAP_ZOOM);
+
+            // Add a base tile layer (the map background)
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                subdomains: 'abcd',
+                maxZoom: 20
+            }).addTo(map);
+
+            // Create layer groups to hold the markers for each brand
+            layerGroups.lime = L.layerGroup().addTo(map);
+            layerGroups.bird = L.layerGroup().addTo(map);
+        }
+
+        /**
+         * Fetches scooter data from a GBFS feed and adds markers to the map.
+         * @param {object} provider - A provider object from the FEEDS config.
+         */
+        async function fetchAndMapVehicles(provider) {
+            console.log(`Fetching data for ${provider.name}...`);
+            let freeBikeStatusUrl;
+
+            try {
+                // 1. Fetch the main gbfs.json file to find the URL for free_bike_status
+                const gbfsResponse = await fetch(CORS_PROXY + encodeURIComponent(provider.gbfs_url));
+                if (!gbfsResponse.ok) throw new Error(`Failed to fetch gbfs.json for ${provider.name}`);
+                
+                const gbfsData = await gbfsResponse.json();
+                
+                // Find the correct feed URL
+                const feed = gbfsData.data.en.feeds.find(f => f.name === 'free_bike_status');
+                if (!feed) throw new Error(`Could not find free_bike_status feed for ${provider.name}`);
+                
+                freeBikeStatusUrl = feed.url;
+
+            } catch (error) {
+                console.error(`Error finding feed URL for ${provider.name}:`, error);
+                document.getElementById(`${provider.name.toLowerCase()}-count`).textContent = 'Error';
+                return; // Stop execution for this provider
+            }
+
+            try {
+                // 2. Fetch the actual vehicle location data
+                const vehiclesResponse = await fetch(CORS_PROXY + encodeURIComponent(freeBikeStatusUrl));
+                if (!vehiclesResponse.ok) throw new Error(`Failed to fetch free_bike_status for ${provider.name}`);
+                
+                const vehiclesData = await vehiclesResponse.json();
+                const vehicles = vehiclesData.data.bikes;
+                
+                // 3. Clear old markers for this provider
+                const layer = layerGroups[provider.name.toLowerCase()];
+                layer.clearLayers();
+
+                // 4. Create a custom icon (REMOVED)
+                /*
+                const scooterIcon = L.divIcon({
+                    className: `scooter-icon ${provider.iconClass}`,
+                    iconSize: [10, 10]
+                });
+                */
+
+                // 5. Add new markers
+                let availableVehicles = 0;
+                vehicles.forEach(vehicle => {
+                    // Check if vehicle is available and not disabled
+                    if (vehicle.is_reserved === false && vehicle.is_disabled === false) {
+                        
+                        // NEW: Use L.circleMarker instead of L.marker
+                        L.circleMarker([vehicle.lat, vehicle.lon], {
+                            radius: 6, // Pixel radius of the circle
+                            fillColor: provider.color,
+                            color: "rgba(255, 255, 255, 0.8)", // White border
+                            weight: 2, // Border width
+                            opacity: 1,
+                            fillOpacity: 0.9
+                        })
+                            .bindPopup(`${provider.name} Scooter<br>Battery: ${vehicle.current_range_meters ? (vehicle.current_range_meters / 1000).toFixed(1) + 'km' : 'N/A'}`)
+                            .addTo(layer);
+                        
+                        availableVehicles++;
+                    }
+                });
+                
+                // 6. Update the count in the UI
+                document.getElementById(`${provider.name.toLowerCase()}-count`).textContent = availableVehicles;
+                console.log(`Successfully mapped ${availableVehicles} ${provider.name} vehicles.`);
+
+            } catch (error) {
+                console.error(`Error mapping vehicles for ${provider.name}:`, error);
+                document.getElementById(`${provider.name.toLowerCase()}-count`).textContent = 'Error';
+            }
+        }
+
+        /**
+         * Main function to update all feeds.
+         */
+        async function updateAllFeeds() {
+            loadingEl.style.display = 'flex'; // Show loading
+            countdown = REFRESH_INTERVAL_SECONDS; // Reset timer
+            timerEl.textContent = countdown;
+            
+            // Run fetches in parallel
+            await Promise.all([
+                fetchAndMapVehicles(FEEDS.lime),
+                fetchAndMapVehicles(FEEDS.bird)
+            ]);
+            
+            loadingEl.style.display = 'none'; // Hide loading
+        }
+        
+        /**
+         * Starts the countdown timer in the UI.
+         */
+        function startTimer() {
+            setInterval(() => {
+                countdown--;
+                if (countdown <= 0) {
+                    countdown = REFRESH_INTERVAL_SECONDS;
+                }
+                timerEl.textContent = countdown;
+            }, 1000);
+        }
+
+        // --- INITIALIZATION ---
+        
+        // Run when the window is loaded
+        window.onload = () => {
+            initMap();
+            updateAllFeeds(); // Load data immediately
+            
+            // Set up automatic refresh
+            setInterval(updateAllFeeds, REFRESH_INTERVAL_SECONDS * 1000);
+            startTimer(); // Start the visual countdown
+        };
+
+    </script>
+</body>
+</html>
